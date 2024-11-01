@@ -7,3 +7,4 @@ stqdm
 hdbscan
 scikit-learn
 umap-learn
+plotly
