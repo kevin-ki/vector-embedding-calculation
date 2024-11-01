@@ -1,0 +1,9 @@
+voyageai
+openai
+google-generativeai
+sentence-transformers
+faiss-cpu
+stqdm
+hdbscan
+scikit-learn
+umap-learn
