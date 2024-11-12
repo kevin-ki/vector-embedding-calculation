@@ -616,14 +616,23 @@ def get_embeddings_for_clustering(embedding_results: Dict, config: Dict) -> np.n
         # Get the selected embedding column from embedding_results
         column = config["column"]
         
-        # Convert embeddings to numpy array
-        embeddings = np.array(
-            st.session_state.files_data["main_df"][column].tolist(),
-            dtype=np.float32
-        )
+        # Convert string embeddings to numpy array
+        embeddings_list = []
+        for emb_str in st.session_state.files_data["main_df"][column]:
+            # Handle string format with commas
+            if isinstance(emb_str, str):
+                # Remove any brackets and split by comma
+                emb_str = emb_str.strip('[]()').split(',')
+                # Convert to float array
+                emb_array = np.array([float(x.strip()) for x in emb_str])
+                embeddings_list.append(emb_array)
+            else:
+                embeddings_list.append(emb_str)
         
+        embeddings = np.array(embeddings_list, dtype=np.float32)
         return embeddings
         
     except Exception as e:
         st.error(f"Error getting embeddings for clustering: {str(e)}")
+        st.error(f"Sample value: {st.session_state.files_data['main_df'][column].iloc[0]}")
         return None
