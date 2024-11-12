@@ -554,9 +554,10 @@ def perform_and_visualize_analysis(config: Dict[str, Any]) -> None:
             if embeddings is not None:
                 clustering_results = perform_clustering(embeddings, config)
                 visualize_clustering_results(
-                    clustering_results,
-                    config,
-                    st.session_state.files_data["main_df"]
+                    st.session_state.files_data["main_df"],  # Pass DataFrame
+                    embeddings,  # Pass embeddings
+                    clustering_results,  # Pass clustering results
+                    config  # Pass config
                 )
     except Exception as e:
         st.error(f"Error in analysis: {str(e)}")
