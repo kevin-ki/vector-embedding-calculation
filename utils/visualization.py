@@ -12,6 +12,8 @@ from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 from utils.similarity_config import calculate_similarity
 from models.embedding_config import get_embeddings_for_similarity, get_embeddings_for_clustering
+from utils.similarity_config import perform_clustering
+import traceback
 
 def reduce_dimensions(embeddings: np.ndarray, method: str) -> np.ndarray:
     """Reduce embedding dimensions to 2D for visualization"""
@@ -526,47 +528,36 @@ def display_embeddings_dataframe(files_data: Dict, embedding_results: Dict) -> N
             display_df2[col] = display_df2[col].apply(lambda x: f"Vector({len(x)} dimensions)")
         st.dataframe(display_df2)
 
-def perform_and_visualize_analysis(analysis_config: Dict[str, Any]) -> None:
-    """Perform analysis and visualize results"""
+def perform_and_visualize_analysis(config: Dict[str, Any]) -> None:
+    """Perform and visualize analysis based on configuration"""
     try:
-        if analysis_config["type"] == "clustering":
-            # Get embeddings for clustering
-            embeddings = get_embeddings_for_clustering(st.session_state.embedding_results, analysis_config)
-            if embeddings is None:
-                st.error("Failed to get embeddings for clustering")
-                return
-                
-            # Perform clustering
-            from utils.similarity_config import perform_clustering
-            results = perform_clustering(embeddings, analysis_config)
+        if not hasattr(st.session_state, 'files_data'):
+            st.error("No file data found in session state")
+            return
+            
+        if config["type"] == "similarity":
+            # Get embeddings from session state
+            embeddings1, embeddings2 = get_embeddings_for_similarity(config)
+            
+            # Calculate similarity
+            similarity_results = calculate_similarity(embeddings1, embeddings2, config)
             
             # Visualize results
-            visualize_clustering_results(
+            visualize_similarity_results(
+                similarity_results,
+                config,
                 st.session_state.files_data["main_df"],
-                embeddings,
-                results,
-                analysis_config
+                st.session_state.files_data.get("second_df", st.session_state.files_data["main_df"])
             )
-        else:  # Similarity calculation
-            embeddings1, embeddings2 = get_embeddings_for_similarity(analysis_config)
-            if embeddings1 is None or embeddings2 is None:
-                st.error("Failed to get embeddings for similarity calculation")
-                return
-                
-            results = calculate_similarity(embeddings1, embeddings2, analysis_config)
-            
-            if results:
-                st.success("Similarity calculation completed!")
-                
-                visualize_similarity_results(
-                    results=results,
-                    config=analysis_config,
-                    df1=st.session_state.files_data["main_df"],
-                    df2=st.session_state.files_data.get("second_df", st.session_state.files_data["main_df"])
+        else:  # clustering
+            embeddings = get_embeddings_for_clustering(st.session_state.embedding_results, config)
+            if embeddings is not None:
+                clustering_results = perform_clustering(embeddings, config)
+                visualize_clustering_results(
+                    clustering_results,
+                    config,
+                    st.session_state.files_data["main_df"]
                 )
-            else:
-                st.error("Similarity calculation failed")
-                
     except Exception as e:
         st.error(f"Error in analysis: {str(e)}")
-        st.exception(e)  # This will show the full traceback
+        st.error(f"Traceback:\n{traceback.format_exc()}")

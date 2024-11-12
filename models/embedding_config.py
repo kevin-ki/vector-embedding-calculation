@@ -32,7 +32,7 @@ class EmbeddingModel:
             genai.configure(api_key=self.api_key)
             return genai
             
-        elif self.model_type == "voyage":
+        elif self.model_type == "voyageai":
             if not self.api_key:
                 raise ValueError("Voyage AI API key is required")
             return voyageai.Client(api_key=self.api_key)
@@ -82,7 +82,7 @@ class EmbeddingModel:
                 )
                 batch_embeddings = response['embeddings']
             
-            elif self.model_type == "voyage":
+            elif self.model_type == "voyageai":
                 result = self.model.embed(
                     batch_texts, 
                     model=self.model_name,
@@ -109,7 +109,7 @@ def setup_model_selection():
         - Google: requires key from https://aistudio.google.com/apikey"""
     )
     
-    model_config = {"type": provider.lower().replace(" ", "-")}
+    model_config = {"type": provider.lower().replace(" ", "")}
     
     # Show appropriate model options based on provider
     if provider == "OpenAI":
@@ -240,35 +240,103 @@ def setup_embedding_configuration(files_data):
 
 def setup_existing_embeddings(files_data: Dict) -> Dict:
     """Setup configuration for using existing embeddings"""
-    config = {}
+    st.sidebar.header("2. Embedding Configuration")
     
-    # Get available embedding columns
-    main_embedding_columns = get_embedding_columns(files_data["main_df"])
-    if not main_embedding_columns:
-        st.sidebar.error("No embedding columns found in the main file")
-        return None
-        
     if files_data["mode"] == "single":
-        config.update({
-            "mode": "single",
-            "embedding_columns": main_embedding_columns,
-            "embeddings": {col: files_data["main_df"][col].values for col in main_embedding_columns}
-        })
-    else:  # dual mode
-        second_embedding_columns = get_embedding_columns(files_data["second_df"])
-        if not second_embedding_columns:
-            st.sidebar.error("No embedding columns found in the second file")
+        # Let user select which column contains embeddings
+        embedding_column = st.sidebar.selectbox(
+            "Select column containing embeddings",
+            options=files_data["main_df"].columns,
+            help="Choose which column contains your vector embeddings"
+        )
+        
+        # Let user select which column(s) were used to create these embeddings
+        source_columns = st.sidebar.multiselect(
+            "Select source column(s)",
+            options=files_data["main_df"].columns,
+            help="Choose the column(s) that were used to generate these embeddings"
+        )
+        
+        if not source_columns:
+            st.sidebar.error("Please select at least one source column")
             return None
             
-        config.update({
-            "mode": "dual",
-            "embedding_columns_1": main_embedding_columns,
-            "embedding_columns_2": second_embedding_columns,
-            "embeddings_1": {col: files_data["main_df"][col].values for col in main_embedding_columns},
-            "embeddings_2": {col: files_data["second_df"][col].values for col in second_embedding_columns}
-        })
-    
-    return config
+        try:
+            # Convert embeddings to numpy array
+            embeddings = np.array([
+                eval(emb) if isinstance(emb, str) else emb 
+                for emb in files_data["main_df"][embedding_column]
+            ], dtype=np.float32)
+            
+            return {
+                "mode": "single",
+                "embedding_column": embedding_column,
+                "embedding_columns": [embedding_column],
+                "source_columns": source_columns,
+                "embeddings": embeddings,
+                "type": "existing"
+            }
+        except Exception as e:
+            st.sidebar.error(f"Error loading embeddings: {str(e)}")
+            return None
+            
+    else:  # dual mode
+        # First file
+        embedding_column_1 = st.sidebar.selectbox(
+            "Select embedding column from first file",
+            options=files_data["main_df"].columns,
+            help="Choose which column contains embeddings in the first file"
+        )
+        
+        source_columns_1 = st.sidebar.multiselect(
+            "Select source column(s) from first file",
+            options=files_data["main_df"].columns,
+            help="Choose the column(s) that were used to generate these embeddings"
+        )
+        
+        # Second file
+        embedding_column_2 = st.sidebar.selectbox(
+            "Select embedding column from second file",
+            options=files_data["second_df"].columns,
+            help="Choose which column contains embeddings in the second file"
+        )
+        
+        source_columns_2 = st.sidebar.multiselect(
+            "Select source column(s) from second file",
+            options=files_data["second_df"].columns,
+            help="Choose the column(s) that were used to generate these embeddings"
+        )
+        
+        if not source_columns_1 or not source_columns_2:
+            st.sidebar.error("Please select source columns for both files")
+            return None
+            
+        try:
+            # Convert embeddings to numpy arrays
+            embeddings_1 = np.array([
+                eval(emb) if isinstance(emb, str) else emb 
+                for emb in files_data["main_df"][embedding_column_1]
+            ])
+            
+            embeddings_2 = np.array([
+                eval(emb) if isinstance(emb, str) else emb 
+                for emb in files_data["second_df"][embedding_column_2]
+            ])
+            
+            return {
+                "mode": "dual",
+                "embedding_column_1": embedding_column_1,
+                "embedding_column_2": embedding_column_2,
+                "embedding_columns_1": [embedding_column_1],
+                "embedding_columns_2": [embedding_column_2],
+                "source_columns_1": source_columns_1,
+                "source_columns_2": source_columns_2,
+                "embeddings_1": embeddings_1,
+                "embeddings_2": embeddings_2
+            }
+        except Exception as e:
+            st.sidebar.error(f"Error loading embeddings: {str(e)}")
+            return None
 
 def generate_embeddings_for_config(files_data: Dict, config: Dict) -> Dict:
     """Generate embeddings based on configuration"""
@@ -506,26 +574,40 @@ def get_embeddings_for_similarity(config: Dict) -> Tuple[np.ndarray, np.ndarray]
     try:
         embedding_results = st.session_state.embedding_results
         
-        if config["mode"] == "single_column":
-            # Get embeddings from embedding_results
-            embeddings = np.array(embedding_results["embeddings"][config["column"]], dtype=np.float32)
-            return embeddings, embeddings
+        if embedding_results["mode"] == "single":
+            # For existing embeddings
+            if isinstance(embedding_results.get("embeddings"), np.ndarray):
+                embeddings = embedding_results["embeddings"]
+                return embeddings, embeddings
             
-        elif config["mode"] == "two_columns":
-            # Get both columns from embedding_results
-            embeddings1 = np.array(embedding_results["embeddings"][config["column1"]], dtype=np.float32)
-            embeddings2 = np.array(embedding_results["embeddings"][config["column2"]], dtype=np.float32)
-            return embeddings1, embeddings2
+            # For newly generated embeddings
+            elif "embeddings" in embedding_results:
+                embeddings = np.array(embedding_results["embeddings"][config["column"]], dtype=np.float32)
+                return embeddings, embeddings
+                
+        else:  # dual mode
+            # For existing embeddings
+            if "embeddings_1" in embedding_results and "embeddings_2" in embedding_results:
+                embeddings1 = embedding_results["embeddings_1"]
+                embeddings2 = embedding_results["embeddings_2"]
+                return embeddings1, embeddings2
             
-        else:  # dual_files mode
-            # Get embeddings from both files in embedding_results
-            embeddings1 = np.array(embedding_results["embeddings_1"][config["column1"]], dtype=np.float32)
-            embeddings2 = np.array(embedding_results["embeddings_2"][config["column2"]], dtype=np.float32)
-            return embeddings1, embeddings2
+            # For newly generated embeddings
+            else:
+                embeddings1 = np.array(embedding_results["embeddings_1"][config["column1"]], dtype=np.float32)
+                embeddings2 = np.array(embedding_results["embeddings_2"][config["column2"]], dtype=np.float32)
+                return embeddings1, embeddings2
             
     except Exception as e:
         st.error(f"Error accessing embeddings: {str(e)}")
-        st.error(f"Available columns in embedding_results: {list(st.session_state.embedding_results.get('embeddings', {}).keys())}")
+        if isinstance(embedding_results, dict):
+            available_keys = list(embedding_results.keys())
+            st.error(f"Available keys in embedding_results: {available_keys}")
+            if "embeddings" in embedding_results:
+                if isinstance(embedding_results["embeddings"], dict):
+                    st.error(f"Available columns: {list(embedding_results['embeddings'].keys())}")
+        else:
+            st.error(f"embedding_results type: {type(embedding_results)}")
         raise
 
 def get_embeddings_for_clustering(embedding_results: Dict, config: Dict) -> np.ndarray:

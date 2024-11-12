@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 from models.embedding_config import (
     setup_embedding_configuration,
-    generate_embeddings_for_config
+    generate_embeddings_for_config,
+    setup_existing_embeddings
 )
 from utils.similarity_config import (
     setup_similarity_configuration,
@@ -24,12 +25,20 @@ def setup_analysis_configuration(files_data, embedding_results):
     """Setup analysis configuration (similarity or clustering)"""
     st.sidebar.header("3. Analysis Configuration")
     
-    # Only show clustering option for single file, single embedding
-    can_cluster = (
-        embedding_results["mode"] == "single" and 
-        (len(embedding_results["embedding_columns"]) == 1 or 
-         "Combine Columns" in str(embedding_results.get("embedding_mode", "")))
-    )
+    # Determine if clustering is possible
+    if embedding_results["mode"] == "single":
+        # Get embedding columns based on mode
+        if "embedding_column" in embedding_results:
+            embedding_columns = [embedding_results["embedding_column"]]
+        else:
+            embedding_columns = embedding_results.get("embedding_columns", [])
+        
+        can_cluster = (
+            len(embedding_columns) == 1 or 
+            "Combine Columns" in str(embedding_results.get("embedding_mode", ""))
+        )
+    else:
+        can_cluster = False
     
     analysis_type = st.sidebar.radio(
         "Analysis Type",
@@ -129,44 +138,72 @@ def main():
     
     # Step 1: File Configuration
     files_data = setup_file_configuration()
-    
     if files_data:
+        # Store files_data in session state
+        st.session_state.files_data = files_data
+        
         # Step 2: Embedding Configuration
-        embedding_config = setup_embedding_configuration(files_data)
+        st.sidebar.header("2. Embedding Configuration")
+        embedding_mode = st.sidebar.radio(
+            "Embedding Mode",
+            options=["Use Existing Embeddings", "Generate New Embeddings"],
+            help="Choose whether to use existing embeddings or generate new ones"
+        )
         
-        if embedding_config and st.sidebar.button("Process Embeddings"):
-            try:
-                # Generate or load embeddings
-                if embedding_config["source"] == "Create New Embeddings":
-                    embedding_results = generate_embeddings_for_config(files_data, embedding_config)
-                    if embedding_results:
-                        st.success("Embeddings generated successfully!")
-                        display_embeddings_dataframe(files_data, embedding_results)
-                        store_embedding_config(files_data, embedding_config, embedding_results)
-        
-                else:
-                    store_embedding_config(files_data, embedding_config)
-                    st.success("Existing embeddings configured successfully!")
-                    
-            except Exception as e:
-                st.error(f"Error processing embeddings: {str(e)}")
+        if embedding_mode == "Use Existing Embeddings":
+            embedding_config = setup_existing_embeddings(files_data)
+            if embedding_config is None:
+                st.error("Missing existing embeddings configuration")
                 return
+            
+            # Store the configuration in session state
+            st.session_state.embedding_results = embedding_config
+            
+            # Only show success message if we have a valid configuration
+            if embedding_config and "embeddings" in embedding_config:
+                st.success("Existing embeddings configured successfully!")
+                
+                # Continue with analysis configuration
+                analysis_config = setup_analysis_configuration(files_data, st.session_state.embedding_results)
+                if analysis_config:
+                    perform_and_visualize_analysis(analysis_config)
         
-        # Step 3: Analysis Configuration
-        if hasattr(st.session_state, 'embedding_results'):
-            if st.session_state.embedding_config.get("embedding_mode") == "Combine Columns":
-                preview_combined_columns(
-                    st.session_state.files_data["main_df"], 
-                    st.session_state.embedding_config["source_columns"]
+        else:  # Generate New Embeddings
+            embedding_config = setup_embedding_configuration(files_data)
+            
+            if embedding_config and st.sidebar.button("Process Embeddings"):
+                try:
+                    # Generate or load embeddings
+                    if embedding_config["source"] == "Create New Embeddings":
+                        embedding_results = generate_embeddings_for_config(files_data, embedding_config)
+                        if embedding_results:
+                            st.success("Embeddings generated successfully!")
+                            display_embeddings_dataframe(files_data, embedding_results)
+                            store_embedding_config(files_data, embedding_config, embedding_results)
+        
+                    else:
+                        store_embedding_config(files_data, embedding_config)
+                        st.success("Existing embeddings configured successfully!")
+                        
+                except Exception as e:
+                    st.error(f"Error processing embeddings: {str(e)}")
+                    return
+            
+            # Step 3: Analysis Configuration
+            if hasattr(st.session_state, 'embedding_results'):
+                if st.session_state.embedding_config.get("embedding_mode") == "Combine Columns":
+                    preview_combined_columns(
+                        st.session_state.files_data["main_df"], 
+                        st.session_state.embedding_config["source_columns"]
+                    )
+                
+                analysis_config = setup_analysis_configuration(
+                    st.session_state.files_data, 
+                    st.session_state.embedding_results
                 )
-            
-            analysis_config = setup_analysis_configuration(
-                st.session_state.files_data, 
-                st.session_state.embedding_results
-            )
-            
-            if analysis_config and st.sidebar.button("Perform Analysis"):
-                perform_and_visualize_analysis(analysis_config)
+                
+                if analysis_config and st.sidebar.button("Perform Analysis"):
+                    perform_and_visualize_analysis(analysis_config)
     else:
         st.info("Please upload the required file(s) to begin.")
 
