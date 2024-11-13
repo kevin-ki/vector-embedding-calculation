@@ -372,16 +372,18 @@ def visualize_similarity_results(results: Dict[str, Any], config: Dict, df1: pd.
         for query_idx, (indices, scores) in enumerate(zip(results["indices"], results["similarity_scores"])):
             query_text = df1[text_column].iloc[query_idx]
             
-            # Ensure we get exactly k neighbors
-            indices = indices[:k]
-            scores = scores[:k]
+            # Filter out invalid indices (-1)
+            valid_mask = indices >= 0
+            valid_indices = indices[valid_mask]
+            valid_scores = scores[valid_mask]
             
-            neighbor_texts = [df2[text_column].iloc[idx] for idx in indices]
-            neighbor_scores = [f"{float(score):.3f}" for score in scores]
-            
-            query_texts.append(query_text)
-            similar_texts.append(neighbor_texts)
-            similarity_scores.append(neighbor_scores)
+            if len(valid_indices) > 0:
+                neighbor_texts = [df2[text_column].iloc[idx] for idx in valid_indices]
+                neighbor_scores = [f"{float(score):.3f}" for score in valid_scores]
+                
+                query_texts.append(query_text)
+                similar_texts.append(neighbor_texts)
+                similarity_scores.append(neighbor_scores)
         
         # Create DataFrame with lists in columns
         results_df = pd.DataFrame({
@@ -394,15 +396,9 @@ def visualize_similarity_results(results: Dict[str, Any], config: Dict, df1: pd.
         st.dataframe(
             results_df,
             column_config={
-                'Query Text': st.column_config.TextColumn(
-                    width="medium",
-                ),
-                'Similar Texts': st.column_config.ListColumn(
-                    width="large",
-                ),
-                'Similarity Scores': st.column_config.ListColumn(
-                    width="medium",
-                ),
+                'Query Text': st.column_config.TextColumn(width="medium"),
+                'Similar Texts': st.column_config.ListColumn(width="large"),
+                'Similarity Scores': st.column_config.ListColumn(width="medium"),
             },
             hide_index=True
         )

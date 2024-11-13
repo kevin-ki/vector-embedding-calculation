@@ -270,11 +270,11 @@ def setup_existing_embeddings(files_data: Dict) -> Dict:
             
             return {
                 "mode": "single",
+                "type": "existing",
                 "embedding_column": embedding_column,
                 "embedding_columns": [embedding_column],
                 "source_columns": source_columns,
-                "embeddings": embeddings,
-                "type": "existing"
+                "embeddings": embeddings
             }
         except Exception as e:
             st.sidebar.error(f"Error loading embeddings: {str(e)}")
@@ -325,6 +325,7 @@ def setup_existing_embeddings(files_data: Dict) -> Dict:
             
             return {
                 "mode": "dual",
+                "type": "existing",
                 "embedding_column_1": embedding_column_1,
                 "embedding_column_2": embedding_column_2,
                 "embedding_columns_1": [embedding_column_1],
@@ -340,85 +341,58 @@ def setup_existing_embeddings(files_data: Dict) -> Dict:
 
 def generate_embeddings_for_config(files_data: Dict, config: Dict) -> Dict:
     """Generate embeddings based on configuration"""
-    st.write("Starting embedding generation...")
-    
     try:
-        if config["mode"] == "single":
-            result = generate_single_file_embeddings(files_data["main_df"], config)
+        if config["type"] == "sentencetransformer":
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer(config["model"])
+            
+            if files_data["mode"] == "single":
+                # Process text from source columns
+                texts = []
+                for col in config["source_columns"]:
+                    texts.extend(files_data["main_df"][col].astype(str).tolist())
+                
+                # Generate embeddings
+                embeddings = model.encode(texts, show_progress_bar=True)
+                
+                return {
+                    "mode": "single",
+                    "embedding_columns": [f"embeddings_{col}" for col in config["source_columns"]],
+                    "embeddings": embeddings,
+                    "source_columns": config["source_columns"]
+                }
+            
+            else:  # dual mode
+                # Process texts from both files
+                texts1 = []
+                texts2 = []
+                for col in config["source_columns_1"]:
+                    texts1.extend(files_data["main_df"][col].astype(str).tolist())
+                for col in config["source_columns_2"]:
+                    texts2.extend(files_data["second_df"][col].astype(str).tolist())
+                
+                # Generate embeddings
+                embeddings1 = model.encode(texts1, show_progress_bar=True)
+                embeddings2 = model.encode(texts2, show_progress_bar=True)
+                
+                return {
+                    "mode": "dual",
+                    "embedding_columns_1": [f"embeddings_{col}" for col in config["source_columns_1"]],
+                    "embedding_columns_2": [f"embeddings_{col}" for col in config["source_columns_2"]],
+                    "embeddings_1": embeddings1,
+                    "embeddings_2": embeddings2,
+                    "source_columns_1": config["source_columns_1"],
+                    "source_columns_2": config["source_columns_2"]
+                }
+        elif config["type"] == "existing":
+            # For existing embeddings, just return the config as is
+            return config
         else:
-            result = generate_dual_file_embeddings(files_data, config)
-        return result
-        
+            raise ValueError(f"Unsupported model type: {config['type']}")
+            
     except Exception as e:
         st.error(f"Error during embedding generation: {str(e)}")
         return None
-
-def generate_single_file_embeddings(df: pd.DataFrame, config: Dict) -> Dict:
-    """Generate embeddings for a single file"""
-    # Create embedding model
-    model = EmbeddingModel(
-        model_type=config["type"],
-        model_name=config["model"],
-        api_key=config.get("api_key")
-    )
-    
-    # Generate embeddings
-    column_name = f"embeddings_{'_'.join(config['source_columns'])}"
-    embeddings = model.generate_embeddings(
-        df=df,
-        source_columns=config["source_columns"]
-    )
-    
-    # Ensure embeddings are float32 and store in DataFrame
-    embeddings = embeddings.astype(np.float32)
-    df[column_name] = embeddings.tolist()
-    
-    return {
-        "mode": "single",
-        "embedding_columns": [column_name],
-        "embeddings": {column_name: embeddings}
-    }
-
-def generate_dual_file_embeddings(files_data: Dict, config: Dict) -> Dict:
-    """Generate embeddings for two files"""
-    model = EmbeddingModel(
-        model_type=config["type"],
-        model_name=config["model"],
-        api_key=config.get("api_key")
-    )
-    
-    progress_text = "Generating embeddings for both files..."
-    progress_bar = st.progress(0)
-    
-    # Generate embeddings for first file
-    st.write("Processing first file...")
-    column_name_1 = f"embeddings_{'_'.join(config['source_columns_1'])}"
-    embeddings_1 = model.generate_embeddings(
-        df=files_data["main_df"],
-        source_columns=config["source_columns_1"]
-    )
-    files_data["main_df"][column_name_1] = embeddings_1.tolist()
-    progress_bar.progress(50)
-    
-    # Generate embeddings for second file
-    st.write("Processing second file...")
-    column_name_2 = f"embeddings_{'_'.join(config['source_columns_2'])}"
-    embeddings_2 = model.generate_embeddings(
-        df=files_data["second_df"],
-        source_columns=config["source_columns_2"]
-    )
-    files_data["second_df"][column_name_2] = embeddings_2.tolist()
-    progress_bar.progress(100)
-    
-    st.success("Embedding generation complete!")
-    
-    return {
-        "mode": "dual",
-        "embedding_columns_1": [column_name_1],
-        "embedding_columns_2": [column_name_2],
-        "embeddings_1": {column_name_1: embeddings_1},
-        "embeddings_2": {column_name_2: embeddings_2}
-    }
 
 def setup_single_file_new_embeddings(files_data: Dict) -> Dict:
     """Setup configuration for creating new embeddings from a single file"""

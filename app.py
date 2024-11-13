@@ -122,8 +122,8 @@ def store_embedding_config(files_data, embedding_config, embedding_results=None)
         return False
 
 def main():
-    set_page_config("Vector embeddings calculations", "📐")
-    st.title("Vector embeddings calculations")
+    set_page_config("Vector Embedding Analysis", "📐")
+    st.title("Vector Embedding Analysis")
     with st.expander("Before you begin"):
         # Read README.md and extract content until "## Before Using This App"
         with open("README.md", "r", encoding="utf-8") as file:
@@ -136,18 +136,28 @@ def main():
         # Display the extracted content
         st.markdown("".join(content))
     
+    # Initialize session state if not already done
+    if 'files_data' not in st.session_state:
+        st.session_state.files_data = None
+    if 'embedding_results' not in st.session_state:
+        st.session_state.embedding_results = None
+    if 'embedding_config' not in st.session_state:
+        st.session_state.embedding_config = None
+    if 'analysis_config' not in st.session_state:
+        st.session_state.analysis_config = None
+    
     # Step 1: File Configuration
     files_data = setup_file_configuration()
     if files_data:
-        # Store files_data in session state
         st.session_state.files_data = files_data
         
         # Step 2: Embedding Configuration
         st.sidebar.header("2. Embedding Configuration")
         embedding_mode = st.sidebar.radio(
             "Embedding Mode",
-            options=["Use Existing Embeddings", "Generate New Embeddings"],
-            help="Choose whether to use existing embeddings or generate new ones"
+            options=["Generate New Embeddings", "Use Existing Embeddings"],
+            key="embedding_mode",  # Add key for persistence
+            help="Choose whether to generate new embeddings or use existing ones"
         )
         
         if embedding_mode == "Use Existing Embeddings":
@@ -156,54 +166,35 @@ def main():
                 st.error("Missing existing embeddings configuration")
                 return
             
-            # Store the configuration in session state
+            st.session_state.embedding_config = embedding_config
             st.session_state.embedding_results = embedding_config
             
-            # Only show success message if we have a valid configuration
             if embedding_config and "embeddings" in embedding_config:
                 st.success("Existing embeddings configured successfully!")
-                
-                # Continue with analysis configuration
                 analysis_config = setup_analysis_configuration(files_data, st.session_state.embedding_results)
                 if analysis_config:
+                    st.session_state.analysis_config = analysis_config
                     perform_and_visualize_analysis(analysis_config)
         
         else:  # Generate New Embeddings
             embedding_config = setup_embedding_configuration(files_data)
+            st.session_state.embedding_config = embedding_config
             
-            if embedding_config and st.sidebar.button("Process Embeddings"):
+            if embedding_config and st.sidebar.button("Process Embeddings", key="process_embeddings"):
                 try:
-                    # Generate or load embeddings
-                    if embedding_config["source"] == "Create New Embeddings":
-                        embedding_results = generate_embeddings_for_config(files_data, embedding_config)
-                        if embedding_results:
-                            st.success("Embeddings generated successfully!")
-                            display_embeddings_dataframe(files_data, embedding_results)
-                            store_embedding_config(files_data, embedding_config, embedding_results)
-        
-                    else:
-                        store_embedding_config(files_data, embedding_config)
-                        st.success("Existing embeddings configured successfully!")
+                    embedding_results = generate_embeddings_for_config(files_data, embedding_config)
+                    if embedding_results:
+                        st.success("Embeddings generated successfully!")
+                        display_embeddings_dataframe(files_data, embedding_results)
+                        st.session_state.embedding_results = embedding_results
                         
+                        analysis_config = setup_analysis_configuration(files_data, st.session_state.embedding_results)
+                        if analysis_config:
+                            st.session_state.analysis_config = analysis_config
+                            perform_and_visualize_analysis(analysis_config)
                 except Exception as e:
-                    st.error(f"Error processing embeddings: {str(e)}")
+                    st.error(f"Error during embedding generation: {str(e)}")
                     return
-            
-            # Step 3: Analysis Configuration
-            if hasattr(st.session_state, 'embedding_results'):
-                if st.session_state.embedding_config.get("embedding_mode") == "Combine Columns":
-                    preview_combined_columns(
-                        st.session_state.files_data["main_df"], 
-                        st.session_state.embedding_config["source_columns"]
-                    )
-                
-                analysis_config = setup_analysis_configuration(
-                    st.session_state.files_data, 
-                    st.session_state.embedding_results
-                )
-                
-                if analysis_config and st.sidebar.button("Perform Analysis"):
-                    perform_and_visualize_analysis(analysis_config)
     else:
         st.info("Please upload the required file(s) to begin.")
 

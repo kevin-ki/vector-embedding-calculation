@@ -157,6 +157,8 @@ def calculate_similarity(embeddings1: np.ndarray, embeddings2: np.ndarray, confi
     else:  # faiss
         st.write("Using FAISS Search")
         k = int(config.get("num_neighbors", 3))
+        # Increase k by 1 to account for self-match that we'll remove
+        search_k = k + 1
         st.write(f"Using k={k}")
         
         # Initialize FAISS index
@@ -164,11 +166,29 @@ def calculate_similarity(embeddings1: np.ndarray, embeddings2: np.ndarray, confi
         index.add(embeddings2.astype(np.float32))
         
         # Search for nearest neighbors
-        scores, indices = index.search(embeddings1.astype(np.float32), k)
+        scores, indices = index.search(embeddings1.astype(np.float32), search_k)
+        
+        # Remove self-matches
+        filtered_indices = []
+        filtered_scores = []
+        
+        for i, (idx_row, score_row) in enumerate(zip(indices, scores)):
+            # Filter out the self-match and take only k neighbors
+            mask = idx_row != i
+            filtered_idx = idx_row[mask][:k]
+            filtered_score = score_row[mask][:k]
+            
+            # Pad with -1 if we don't have enough neighbors after filtering
+            if len(filtered_idx) < k:
+                filtered_idx = np.pad(filtered_idx, (0, k - len(filtered_idx)), constant_values=-1)
+                filtered_score = np.pad(filtered_score, (0, k - len(filtered_score)), constant_values=0)
+            
+            filtered_indices.append(filtered_idx)
+            filtered_scores.append(filtered_score)
         
         return {
-            "indices": indices,
-            "similarity_scores": scores
+            "indices": np.array(filtered_indices),
+            "similarity_scores": np.array(filtered_scores)
         }
 
 def setup_comparison_mode(embedding_results: Dict) -> Dict:
@@ -185,22 +205,25 @@ def calculate_cosine_similarity(embeddings1: np.ndarray, embeddings2: np.ndarray
         if embeddings1.size == 0 or embeddings2.size == 0:
             return np.array([])
 
-        # Normalize the embeddings
-        norm1 = np.linalg.norm(embeddings1, axis=1)
-        norm2 = np.linalg.norm(embeddings2, axis=1)
+        # Calculate dot product
+        dot_product = np.dot(embeddings1, embeddings2.T)
         
-        # Add small epsilon to avoid division by zero
+        # Calculate magnitudes
+        magnitude1 = np.sqrt(np.sum(embeddings1**2, axis=1))
+        magnitude2 = np.sqrt(np.sum(embeddings2**2, axis=1))
+        
+        # Avoid division by zero
+        magnitude_matrix = np.outer(magnitude1, magnitude2)
         eps = 1e-8
-        embeddings1_norm = embeddings1 / (norm1[:, np.newaxis] + eps)
-        embeddings2_norm = embeddings2 / (norm2[:, np.newaxis] + eps)
         
         # Calculate cosine similarity
-        similarity_matrix = np.dot(embeddings1_norm, embeddings2_norm.T)
+        similarity_matrix = dot_product / (magnitude_matrix + eps)
         
-        # Clip values to [-1, 1] range to handle numerical errors
+        # Clip values to [-1, 1] range
         similarity_matrix = np.clip(similarity_matrix, -1.0, 1.0)
         
         return similarity_matrix
+        
     except Exception as e:
         st.error(f"Error in cosine similarity calculation: {str(e)}")
         return np.array([])
