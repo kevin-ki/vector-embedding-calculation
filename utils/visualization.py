@@ -256,7 +256,6 @@ def visualize_similarity_results(results: Dict[str, Any], config: Dict, df1: pd.
     
     if is_cosine:
         # First show the heatmap
-        st.write("Similarity Matrix Heatmap")
         visualize_cosine_similarity(results["similarity_matrix"])
         
         # Get the original text column
