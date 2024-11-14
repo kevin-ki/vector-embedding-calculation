@@ -240,7 +240,7 @@ def setup_embedding_configuration(files_data):
 
 def setup_existing_embeddings(files_data: Dict) -> Dict:
     """Setup configuration for using existing embeddings"""
-    st.sidebar.header("2. Embedding Configuration")
+    st.sidebar.header("3. Embeddings")
     
     if files_data["mode"] == "single":
         # Let user select which column contains embeddings
@@ -442,7 +442,7 @@ def setup_single_file_new_embeddings(files_data: Dict) -> Dict:
 
 def setup_new_embeddings(files_data: Dict) -> Dict:
     """Setup configuration for creating new embeddings"""
-    # Get model configuration first
+    # Get model configuration
     model_config = setup_model_selection()
     if not model_config:
         return None
@@ -456,22 +456,23 @@ def setup_new_embeddings(files_data: Dict) -> Dict:
             st.sidebar.error("No text columns found in the file")
             return None
             
-        selected_columns = st.sidebar.multiselect(
+        source_columns = st.sidebar.multiselect(
             "Select text columns for embedding",
             options=text_columns,
             help="Choose the columns to generate embeddings from"
         )
         
-        if not selected_columns:
+        if not source_columns:
             st.sidebar.error("Please select at least one column")
             return None
             
         return {
             "mode": "single",
-            "source_columns": selected_columns,
+            "source_columns": source_columns,
             **model_config
         }
-    else:
+    
+    else:  # dual mode
         # Get text columns from both files
         main_text_columns = [col for col in files_data["main_df"].columns 
                            if files_data["main_df"][col].dtype == 'object']
@@ -482,29 +483,29 @@ def setup_new_embeddings(files_data: Dict) -> Dict:
             st.sidebar.error("No text columns found in one or both files")
             return None
             
-        main_selected = st.sidebar.multiselect(
+        source_columns_1 = st.sidebar.multiselect(
             "Select text columns from first file",
             options=main_text_columns,
-            help="Choose columns from first file for embedding generation"
+            help="Choose columns from first file"
         )
         
-        second_selected = st.sidebar.multiselect(
+        source_columns_2 = st.sidebar.multiselect(
             "Select text columns from second file",
             options=second_text_columns,
-            help="Choose columns from second file for embedding generation"
+            help="Choose columns from second file"
         )
         
-        if not main_selected or not second_selected:
+        if not source_columns_1 or not source_columns_2:
             st.sidebar.error("Please select columns from both files")
             return None
             
         return {
             "mode": "dual",
-            "source_columns_1": main_selected,
-            "source_columns_2": second_selected,
+            "source_columns_1": source_columns_1,
+            "source_columns_2": source_columns_2,
             **model_config
         }
-    
+
 def setup_dual_file_new_embeddings(files_data: Dict) -> Dict:
     """Setup configuration for creating new embeddings from two files"""
     # Get text columns from both files

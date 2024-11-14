@@ -3,7 +3,8 @@ import pandas as pd
 from models.embedding_config import (
     setup_embedding_configuration,
     generate_embeddings_for_config,
-    setup_existing_embeddings
+    setup_existing_embeddings,
+    setup_new_embeddings
 )
 from utils.similarity_config import (
     setup_similarity_configuration,
@@ -141,10 +142,6 @@ def main():
         st.session_state.files_data = None
     if 'embedding_results' not in st.session_state:
         st.session_state.embedding_results = None
-    if 'embedding_config' not in st.session_state:
-        st.session_state.embedding_config = None
-    if 'analysis_config' not in st.session_state:
-        st.session_state.analysis_config = None
     
     # Step 1: File Configuration
     files_data = setup_file_configuration()
@@ -156,45 +153,34 @@ def main():
         embedding_mode = st.sidebar.radio(
             "Embedding Mode",
             options=["Generate New Embeddings", "Use Existing Embeddings"],
-            key="embedding_mode",  # Add key for persistence
-            help="Choose whether to generate new embeddings or use existing ones"
+            key="embedding_mode"
         )
         
-        if embedding_mode == "Use Existing Embeddings":
-            embedding_config = setup_existing_embeddings(files_data)
-            if embedding_config is None:
-                st.error("Missing existing embeddings configuration")
-                return
-            
-            st.session_state.embedding_config = embedding_config
-            st.session_state.embedding_results = embedding_config
-            
-            if embedding_config and "embeddings" in embedding_config:
-                st.success("Existing embeddings configured successfully!")
-                analysis_config = setup_analysis_configuration(files_data, st.session_state.embedding_results)
-                if analysis_config:
-                    st.session_state.analysis_config = analysis_config
-                    perform_and_visualize_analysis(analysis_config)
-        
-        else:  # Generate New Embeddings
-            embedding_config = setup_embedding_configuration(files_data)
-            st.session_state.embedding_config = embedding_config
-            
-            if embedding_config and st.sidebar.button("Process Embeddings", key="process_embeddings"):
+        if embedding_mode == "Generate New Embeddings":
+            embedding_config = setup_new_embeddings(files_data)
+            if embedding_config and st.sidebar.button("Generate Embeddings"):
                 try:
                     embedding_results = generate_embeddings_for_config(files_data, embedding_config)
                     if embedding_results:
                         st.success("Embeddings generated successfully!")
-                        display_embeddings_dataframe(files_data, embedding_results)
                         st.session_state.embedding_results = embedding_results
                         
-                        analysis_config = setup_analysis_configuration(files_data, st.session_state.embedding_results)
+                        # Continue with analysis
+                        analysis_config = setup_analysis_configuration(files_data, embedding_results)
                         if analysis_config:
-                            st.session_state.analysis_config = analysis_config
                             perform_and_visualize_analysis(analysis_config)
                 except Exception as e:
-                    st.error(f"Error during embedding generation: {str(e)}")
-                    return
+                    st.error(f"Error generating embeddings: {str(e)}")
+                    
+        else:  # Use Existing Embeddings
+            embedding_config = setup_existing_embeddings(files_data)
+            if embedding_config:
+                st.session_state.embedding_results = embedding_config
+                analysis_config = setup_analysis_configuration(files_data, embedding_config)
+                if analysis_config:
+                    perform_and_visualize_analysis(analysis_config)
+            else:
+                st.error("Please configure existing embeddings")
     else:
         st.info("Please upload the required file(s) to begin.")
 
