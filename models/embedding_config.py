@@ -40,43 +40,40 @@ class EmbeddingModel:
         else:
             raise ValueError(f"Unsupported model type: {self.model_type}")
 
-    def generate_embeddings(self, df: pd.DataFrame, source_columns: List[str], batch_size: int = 32) -> np.ndarray:
-        """
-        Generate embeddings for the specified columns with progress bar
-        
-        Args:
-            df: DataFrame containing the source columns
-            source_columns: List of column names to use for embedding generation
-            batch_size: Number of texts to process at once (for memory efficiency)
-        """
-        # Combine specified columns into single text
-        df['combined_text'] = df[source_columns].apply(
-            lambda row: ' '.join(row.values.astype(str)), 
-            axis=1
-        )
-        
-        texts = df['combined_text'].tolist()
+    def generate_embeddings(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
+        """Generate embeddings for the given texts"""
         embeddings_list = []
         
         # Process in batches with progress bar
-        for batch_texts in stqdm(
-            [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)],
-            desc="Generating embeddings"
-        ):
-            if self.model_type == "voyageai":
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            
+            if self.model_type == "openai":
+                response = self.model.embeddings.create(
+                    model=self.model_name,
+                    input=batch
+                )
+                batch_embeddings = [item.embedding for item in response.data]
+                
+            elif self.model_type == "sentence-transformer":
+                batch_embeddings = self.model.encode(batch).tolist()
+                
+            elif self.model_type == "google":
+                model = genai.GenerativeModel(self.model_name)
+                batch_embeddings = [
+                    model.embed_content(text=text).embedding
+                    for text in batch
+                ]
+                
+            elif self.model_type == "voyageai":
                 result = self.model.embed(
-                    batch_texts,
+                    batch,
                     model=self.model_name,
                     input_type="document"
                 )
                 batch_embeddings = result.embeddings
-            else:
-                batch_embeddings = self._generate_batch_embeddings(batch_texts)
-            
+                
             embeddings_list.extend(batch_embeddings)
-        
-        # Clean up temporary column
-        df.drop('combined_text', axis=1, inplace=True)
         
         return np.array(embeddings_list)
     
@@ -339,16 +336,21 @@ def generate_embeddings_for_config(files_data: Dict, config: Dict) -> Dict:
         
         if files_data["mode"] == "single":
             # Generate embeddings for single file
-            embeddings = model.generate_embeddings(
-                files_data["main_df"], 
-                config["source_columns"]
-            )
+            if len(config["source_columns"]) > 1:
+                # Combine multiple columns
+                text_series = combine_text_columns(files_data["main_df"], config["source_columns"])
+            else:
+                # Single column
+                text_series = files_data["main_df"][config["source_columns"][0]]
+            
+            # Generate embeddings
+            embeddings = model.generate_embeddings(text_series)
             
             # Create embedding column name and store in DataFrame
             embedding_column = f"embeddings_{config['source_columns'][0]}"
             files_data["main_df"][embedding_column] = embeddings.tolist()
             
-            # Update session state with the modified DataFrame
+            # Update session state
             if "files_data" not in st.session_state:
                 st.session_state.files_data = {}
             st.session_state.files_data = files_data
@@ -361,17 +363,16 @@ def generate_embeddings_for_config(files_data: Dict, config: Dict) -> Dict:
                 "source_columns": config["source_columns"]
             }
             
-            # Store results in session state
             st.session_state.embedding_results = result
-            
             return result
             
         else:  # dual mode
-            # Similar updates for dual mode...
+            # Handle dual mode similarly...
             pass
             
     except Exception as e:
         st.error(f"Error during embedding generation: {str(e)}")
+        st.error(f"Config: {config}")
         return None
 
 def setup_single_file_new_embeddings(files_data: Dict) -> Dict:
