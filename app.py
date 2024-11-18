@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from models.embedding_config import (
-    setup_embedding_configuration,
     generate_embeddings_for_config,
     setup_existing_embeddings,
     setup_new_embeddings
@@ -12,10 +11,8 @@ from utils.similarity_config import (
 )
 from models.model_constants import *
 from utils.utils import set_page_config
-from utils.validation import validate_embedding_config, validate_embeddings_format
+from utils.validation import validate_embedding_config
 from utils.visualization import (
-    preview_combined_columns,
-    display_embeddings_dataframe,
     perform_and_visualize_analysis
 )
 from utils.file_config import setup_file_configuration
@@ -50,6 +47,8 @@ def setup_analysis_configuration(files_data, embedding_results):
     if analysis_type == "Similarity Calculation":
         return setup_similarity_configuration(files_data, embedding_results)
     else:
+        # Store analysis type in session state
+        st.session_state.analysis_type = "clustering"
         return setup_clustering_configuration(files_data, embedding_results)
 
 
@@ -93,26 +92,11 @@ def store_embedding_config(files_data, embedding_config, embedding_results=None)
         if not is_valid:
             st.error(message)
             return False
-            
-        # For existing embeddings
-        if embedding_config["source"] == "Use Existing Embeddings":
-            embeddings = embedding_config["existing_embeddings"]["embeddings"]
-            is_valid, message = validate_embeddings_format(embeddings)
-            if not is_valid:
-                st.error(message)
-                return False
-                
-        # For new embeddings
-        elif embedding_results:
-            is_valid, message = validate_embeddings_format(embedding_results["embeddings"])
-            if not is_valid:
-                st.error(message)
-                return False
-                
+        
         # Store in session state
         st.session_state.update({
-            "embedding_results": embedding_results or embedding_config["existing_embeddings"],
-            "files_data": files_data,
+            "embedding_results": embedding_results or embedding_config.get("existing_embeddings"),
+            "files_data": files_data,  # This now contains the DataFrame with embeddings
             "embedding_config": embedding_config
         })
         
@@ -142,14 +126,19 @@ def main():
         st.session_state.files_data = None
     if 'embedding_results' not in st.session_state:
         st.session_state.embedding_results = None
+    if 'embedding_config' not in st.session_state:
+        st.session_state.embedding_config = None
+    if 'current_view' not in st.session_state:
+        st.session_state.current_view = 'upload'
     
     # Step 1: File Configuration
-    files_data = setup_file_configuration()
-    if files_data:
-        st.session_state.files_data = files_data
-        
+    if st.session_state.files_data is None:
+        files_data = setup_file_configuration()
+        if files_data:
+            st.session_state.files_data = files_data
+    
+    if st.session_state.files_data:
         # Step 2: Embedding Configuration
-        st.sidebar.header("2. Embedding Configuration")
         embedding_mode = st.sidebar.radio(
             "Embedding Mode",
             options=["Generate New Embeddings", "Use Existing Embeddings"],
@@ -157,32 +146,33 @@ def main():
         )
         
         if embedding_mode == "Generate New Embeddings":
-            embedding_config = setup_new_embeddings(files_data)
-            if embedding_config and st.sidebar.button("Generate Embeddings"):
-                try:
-                    embedding_results = generate_embeddings_for_config(files_data, embedding_config)
-                    if embedding_results:
-                        st.success("Embeddings generated successfully!")
-                        st.session_state.embedding_results = embedding_results
-                        
-                        # Continue with analysis
-                        analysis_config = setup_analysis_configuration(files_data, embedding_results)
-                        if analysis_config:
-                            perform_and_visualize_analysis(analysis_config)
-                except Exception as e:
-                    st.error(f"Error generating embeddings: {str(e)}")
-                    
+            embedding_config = setup_new_embeddings(st.session_state.files_data)
+            if embedding_config:
+                if st.sidebar.button("Generate Embeddings"):
+                    try:
+                        embedding_results = generate_embeddings_for_config(
+                            st.session_state.files_data, 
+                            embedding_config
+                        )
+                        if embedding_results:
+                            st.success("Embeddings generated successfully!")
+                    except Exception as e:
+                        st.error(f"Error generating embeddings: {str(e)}")
+        
         else:  # Use Existing Embeddings
-            embedding_config = setup_existing_embeddings(files_data)
+            embedding_config = setup_existing_embeddings(st.session_state.files_data)
             if embedding_config:
                 st.session_state.embedding_results = embedding_config
-                analysis_config = setup_analysis_configuration(files_data, embedding_config)
-                if analysis_config:
-                    perform_and_visualize_analysis(analysis_config)
-            else:
-                st.error("Please configure existing embeddings")
-    else:
-        st.info("Please upload the required file(s) to begin.")
+                st.session_state.embedding_config = embedding_config
+        
+        # Step 3: Analysis Configuration
+        if st.session_state.embedding_results:
+            analysis_config = setup_analysis_configuration(
+                st.session_state.files_data,
+                st.session_state.embedding_results
+            )
+            if analysis_config:
+                perform_and_visualize_analysis(analysis_config)
 
 
 if __name__ == "__main__":

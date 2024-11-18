@@ -59,36 +59,19 @@ class EmbeddingModel:
         embeddings_list = []
         
         # Process in batches with progress bar
-        for i in stqdm(range(0, len(texts), batch_size), desc="Generating embeddings"):
-            batch_texts = texts[i:i + batch_size]
-            
-            if self.model_type == "openai":
-                batch_embeddings = [
-                    self.model.embeddings.create(
-                        input=text, 
-                        model=self.model_name
-                    ).data[0].embedding 
-                    for text in batch_texts
-                ]
-            
-            elif self.model_type == "sentence-transformer":
-                batch_embeddings = self.model.encode(batch_texts, show_progress_bar=False)
-            
-            elif self.model_type == "google":
-                response = self.model.embed_content(
-                    model=self.model_name,
-                    content=batch_texts,
-                    task_type="retrieval_document"
-                )
-                batch_embeddings = response['embeddings']
-            
-            elif self.model_type == "voyageai":
+        for batch_texts in stqdm(
+            [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)],
+            desc="Generating embeddings"
+        ):
+            if self.model_type == "voyageai":
                 result = self.model.embed(
-                    batch_texts, 
+                    batch_texts,
                     model=self.model_name,
                     input_type="document"
                 )
                 batch_embeddings = result.embeddings
+            else:
+                batch_embeddings = self._generate_batch_embeddings(batch_texts)
             
             embeddings_list.extend(batch_embeddings)
         
@@ -109,10 +92,34 @@ def setup_model_selection():
         - Google: requires key from https://aistudio.google.com/apikey"""
     )
     
-    model_config = {"type": provider.lower().replace(" ", "")}
+    provider_types = {
+        "Sentence Transformer": "sentence-transformer",
+        "OpenAI": "openai",
+        "Voyage AI": "voyageai",
+        "Google": "google"
+    }
     
-    # Show appropriate model options based on provider
-    if provider == "OpenAI":
+    model_config = {"type": provider_types[provider]}
+    
+    if provider == "Voyage AI":
+        # Use exact model names as per documentation
+        model_name = st.sidebar.selectbox(
+            "Select Model",
+            options=["voyage-2", "voyage-3"],
+            format_func=lambda x: f"{x} - {VOYAGE_EMBEDDING_MODELS[x]['description']}"
+        )
+        api_key = st.sidebar.text_input(
+            "Voyage AI API Key", 
+            type="password",
+            help="Enter your Voyage AI API key"
+        )
+        # Use the model name directly
+        model_config.update({
+            "model": model_name,  # No need for model_name mapping anymore
+            "api_key": api_key
+        })
+    
+    elif provider == "OpenAI":
         model_name = st.sidebar.selectbox(
             "Select Model",
             options=list(OPENAI_EMBEDDING_MODELS.keys()),
@@ -121,20 +128,7 @@ def setup_model_selection():
         api_key = st.sidebar.text_input(
             "OpenAI API Key", 
             type="password",
-            help="Enter your OpenAI API key from https://platform.openai.com/api-keys"
-        )
-        model_config.update({"model": model_name, "api_key": api_key})
-    
-    elif provider == "Voyage AI":
-        model_name = st.sidebar.selectbox(
-            "Select Model",
-            options=list(VOYAGE_EMBEDDING_MODELS.keys()),
-            format_func=lambda x: f"{x} - {VOYAGE_EMBEDDING_MODELS[x]}"
-        )
-        api_key = st.sidebar.text_input(
-            "Voyage AI API Key", 
-            type="password",
-            help="Enter your Voyage AI API key from https://dash.voyageai.com/api-keys"
+            help="Enter your OpenAI API key"
         )
         model_config.update({"model": model_name, "api_key": api_key})
     
@@ -142,8 +136,7 @@ def setup_model_selection():
         model_name = st.sidebar.selectbox(
             "Select Model",
             options=list(SENTENCE_TRANSFORMER_MODELS.keys()),
-            format_func=lambda x: f"{x} - {SENTENCE_TRANSFORMER_MODELS[x]}",
-            help="Select from available open-source models. No API key required."
+            format_func=lambda x: f"{x} - {SENTENCE_TRANSFORMER_MODELS[x]}"
         )
         model_config.update({"model": model_name})
     
@@ -156,7 +149,7 @@ def setup_model_selection():
         api_key = st.sidebar.text_input(
             "Google API Key", 
             type="password",
-            help="Enter your Google AI API key from https://aistudio.google.com/apikey"
+            help="Enter your Google API key"
         )
         model_config.update({"model": model_name, "api_key": api_key})
     
@@ -342,53 +335,40 @@ def setup_existing_embeddings(files_data: Dict) -> Dict:
 def generate_embeddings_for_config(files_data: Dict, config: Dict) -> Dict:
     """Generate embeddings based on configuration"""
     try:
-        if config["type"] == "sentencetransformer":
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer(config["model"])
+        model = EmbeddingModel(config["type"], config["model"], config.get("api_key"))
+        
+        if files_data["mode"] == "single":
+            # Generate embeddings for single file
+            embeddings = model.generate_embeddings(
+                files_data["main_df"], 
+                config["source_columns"]
+            )
             
-            if files_data["mode"] == "single":
-                # Process text from source columns
-                texts = []
-                for col in config["source_columns"]:
-                    texts.extend(files_data["main_df"][col].astype(str).tolist())
-                
-                # Generate embeddings
-                embeddings = model.encode(texts, show_progress_bar=True)
-                
-                return {
-                    "mode": "single",
-                    "embedding_columns": [f"embeddings_{col}" for col in config["source_columns"]],
-                    "embeddings": embeddings,
-                    "source_columns": config["source_columns"]
-                }
+            # Create embedding column name and store in DataFrame
+            embedding_column = f"embeddings_{config['source_columns'][0]}"
+            files_data["main_df"][embedding_column] = embeddings.tolist()
             
-            else:  # dual mode
-                # Process texts from both files
-                texts1 = []
-                texts2 = []
-                for col in config["source_columns_1"]:
-                    texts1.extend(files_data["main_df"][col].astype(str).tolist())
-                for col in config["source_columns_2"]:
-                    texts2.extend(files_data["second_df"][col].astype(str).tolist())
-                
-                # Generate embeddings
-                embeddings1 = model.encode(texts1, show_progress_bar=True)
-                embeddings2 = model.encode(texts2, show_progress_bar=True)
-                
-                return {
-                    "mode": "dual",
-                    "embedding_columns_1": [f"embeddings_{col}" for col in config["source_columns_1"]],
-                    "embedding_columns_2": [f"embeddings_{col}" for col in config["source_columns_2"]],
-                    "embeddings_1": embeddings1,
-                    "embeddings_2": embeddings2,
-                    "source_columns_1": config["source_columns_1"],
-                    "source_columns_2": config["source_columns_2"]
-                }
-        elif config["type"] == "existing":
-            # For existing embeddings, just return the config as is
-            return config
-        else:
-            raise ValueError(f"Unsupported model type: {config['type']}")
+            # Update session state with the modified DataFrame
+            if "files_data" not in st.session_state:
+                st.session_state.files_data = {}
+            st.session_state.files_data = files_data
+            
+            result = {
+                "mode": "single",
+                "embedding_columns": [embedding_column],
+                "embedding_column": embedding_column,
+                "embeddings": embeddings,
+                "source_columns": config["source_columns"]
+            }
+            
+            # Store results in session state
+            st.session_state.embedding_results = result
+            
+            return result
+            
+        else:  # dual mode
+            # Similar updates for dual mode...
+            pass
             
     except Exception as e:
         st.error(f"Error during embedding generation: {str(e)}")

@@ -2,17 +2,24 @@ import streamlit as st
 import numpy as np
 import faiss
 from typing import Dict
+import hdbscan
+from sklearn.cluster import KMeans, DBSCAN, OPTICS
 
 def setup_clustering_configuration(files_data: Dict, embedding_results: Dict) -> Dict:
     """Setup clustering configuration"""
-    st.sidebar.header("3. Clustering Configuration")
+    # Get the correct embedding column
+    if "embedding_column" in embedding_results:
+        column = embedding_results["embedding_column"]
+    elif "embedding_columns" in embedding_results and embedding_results["embedding_columns"]:
+        column = embedding_results["embedding_columns"][0]
+    else:
+        st.error("No embedding columns found")
+        return None
     
-    # Select column for clustering
-    column = st.sidebar.selectbox(
-        "Select column for clustering",
-        options=embedding_results.get("embedding_columns", []),
-        help="Choose which embedded column to use for clustering"
-    )
+    config = {
+        "type": "clustering",
+        "column": column
+    }
     
     # Select clustering algorithm
     algorithm = st.sidebar.selectbox(
@@ -26,90 +33,71 @@ def setup_clustering_configuration(files_data: Dict, embedding_results: Dict) ->
         """
     )
     
-    config = {
-        "type": "clustering",
-        "column": column,
-        "algorithm": algorithm
-    }
+    config["algorithm"] = algorithm
     
     # Algorithm-specific parameters
     if algorithm == "K-Means":
-        config["n_clusters"] = st.sidebar.number_input(
-            "Number of clusters (k)",
+        n_clusters = st.sidebar.number_input(
+            "Number of Clusters",
             min_value=2,
             max_value=100,
             value=5,
-            help="The number of clusters to form"
+            help="Number of clusters to create"
         )
-        
-    elif algorithm == "DBSCAN":
-        config["eps"] = st.sidebar.number_input(
-            "Epsilon (neighborhood size)",
-            min_value=0.1,
-            max_value=10.0,
-            value=0.5,
-            help="Maximum distance between two samples for neighborhood"
-        )
-        config["min_samples"] = st.sidebar.number_input(
-            "Minimum samples",
-            min_value=2,
-            max_value=100,
-            value=5,
-            help="Number of samples in a neighborhood for a core point"
-        )
+        config["n_clusters"] = n_clusters
         
     elif algorithm == "HDBSCAN":
-        config["min_cluster_size"] = st.sidebar.number_input(
-            "Minimum cluster size",
+        min_cluster_size = st.sidebar.number_input(
+            "Minimum Cluster Size",
             min_value=2,
             max_value=100,
-            value=5,
-            help="The minimum size of clusters"
+            value=2,
+            help="Minimum number of points required to form a cluster"
         )
-        config["min_samples"] = st.sidebar.number_input(
-            "Minimum samples",
+        min_samples = st.sidebar.number_input(
+            "Minimum Samples",
             min_value=1,
             max_value=100,
-            value=5,
-            help="Number of samples in a neighborhood for a core point"
+            value=1,
+            help="Number of samples in a neighborhood for a point to be considered as a core point"
         )
+        config.update({
+            "min_cluster_size": min_cluster_size,
+            "min_samples": min_samples
+        })
         
-    elif algorithm == "OPTICS":
-        config["min_samples"] = st.sidebar.number_input(
-            "Minimum samples",
+    elif algorithm in ["DBSCAN", "OPTICS"]:
+        min_samples = st.sidebar.number_input(
+            "Minimum Points per Cluster",
             min_value=2,
             max_value=100,
-            value=5,
-            help="Number of samples in a neighborhood for a core point"
+            value=2,
+            help="Minimum number of points required to form a cluster"
         )
-        config["max_eps"] = st.sidebar.number_input(
-            "Maximum epsilon",
-            min_value=0.1,
-            max_value=10.0,
-            value=5.0,  # Changed from np.inf to a reasonable default
-            help="Maximum distance between two samples for neighborhood"
-        )
-        config["cluster_method"] = st.sidebar.selectbox(
-            "Cluster extraction method",
-            options=["xi", "dbscan"],
-            help="Method to extract clusters"
-        )
-        if config["cluster_method"] == "xi":
-            config["xi"] = st.sidebar.slider(
-                "Xi parameter",
+        config["min_samples"] = min_samples
+        
+        if algorithm == "DBSCAN":
+            eps = st.sidebar.number_input(
+                "Epsilon (ε)",
                 min_value=0.01,
-                max_value=0.99,
-                value=0.05,
-                help="Determines the minimum steepness on the reachability plot"
+                max_value=2.0,
+                value=0.5,
+                step=0.01,
+                help="Maximum distance between two samples for them to be considered neighbors"
             )
-        else:  # dbscan
-            config["eps"] = st.sidebar.number_input(
-                "Epsilon for DBSCAN extraction",
+            config["eps"] = eps
+        
+        # Add max_eps for OPTICS
+        elif algorithm == "OPTICS":
+            max_eps = st.sidebar.number_input(
+                "Maximum Epsilon",
                 min_value=0.1,
                 max_value=10.0,
-                value=0.5,
-                help="Epsilon parameter for DBSCAN cluster extraction"
+                value=2.0,
+                step=0.1,
+                help="Maximum distance to look for neighbors"
             )
+            config["max_eps"] = max_eps
     
     return config
 
@@ -313,58 +301,54 @@ def setup_dual_mode_comparison(embedding_results: Dict) -> Dict:
     }
 
 def perform_clustering(embeddings: np.ndarray, config: Dict) -> Dict:
-    """Perform clustering on embeddings"""
+    """Perform clustering based on configuration"""
     try:
         if config["algorithm"] == "K-Means":
-            from sklearn.cluster import KMeans
-            clustering = KMeans(n_clusters=config["n_clusters"], random_state=42)
-            labels = clustering.fit_predict(embeddings)
+            kmeans = KMeans(n_clusters=config["n_clusters"], random_state=42)
+            labels = kmeans.fit_predict(embeddings)
+            # Calculate probabilities based on distance to cluster centers
+            distances = kmeans.transform(embeddings)
+            probabilities = 1 / (1 + distances.min(axis=1))
+            
             return {
                 "labels": labels,
-                "algorithm": config["algorithm"],
-                "inertia": clustering.inertia_  # Add inertia for K-Means
+                "probabilities": probabilities,
+                "inertia": kmeans.inertia_
             }
             
         elif config["algorithm"] == "DBSCAN":
-            from sklearn.cluster import DBSCAN
-            clustering = DBSCAN(
-                eps=config["eps"],
-                min_samples=config["min_samples"]
-            )
-            labels = clustering.fit_predict(embeddings)
+            dbscan = DBSCAN(eps=config["eps"], min_samples=config["min_samples"])
+            labels = dbscan.fit_predict(embeddings)
+            
             return {
-                "labels": labels,
-                "algorithm": config["algorithm"],
-                "n_clusters": len(set(labels)) - (1 if -1 in labels else 0)
+                "labels": labels
             }
             
         elif config["algorithm"] == "HDBSCAN":
-            import hdbscan
-            clustering = hdbscan.HDBSCAN(
+            clusterer = hdbscan.HDBSCAN(
                 min_cluster_size=config["min_cluster_size"],
-                min_samples=config["min_samples"] if config["min_samples"] else None,
+                min_samples=config["min_samples"],
                 prediction_data=True
             )
-            labels = clustering.fit_predict(embeddings)
+            labels = clusterer.fit_predict(embeddings)
+            
             return {
                 "labels": labels,
-                "algorithm": config["algorithm"],
-                "probabilities": clustering.probabilities_,
-                "outlier_scores": clustering.outlier_scores_
+                "probabilities": clusterer.probabilities_,
+                "outlier_scores": clusterer.outlier_scores_
             }
             
         elif config["algorithm"] == "OPTICS":
-            from sklearn.cluster import OPTICS
-            clustering = OPTICS(
+            optics = OPTICS(
                 min_samples=config["min_samples"],
                 max_eps=config["max_eps"]
             )
-            labels = clustering.fit_predict(embeddings)
+            labels = optics.fit_predict(embeddings)
+            outlier_scores = optics.reachability_
+            
             return {
                 "labels": labels,
-                "algorithm": config["algorithm"],
-                "reachability": clustering.reachability_,
-                "ordering": clustering.ordering_
+                "outlier_scores": outlier_scores
             }
             
     except Exception as e:

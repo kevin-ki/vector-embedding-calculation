@@ -15,6 +15,10 @@ from models.embedding_config import get_embeddings_for_similarity, get_embedding
 from utils.similarity_config import perform_clustering
 import traceback
 
+def convert_df(df: pd.DataFrame) -> bytes:
+    """Convert a DataFrame to CSV for download"""
+    return df.to_csv(index=False).encode('utf-8')
+
 def reduce_dimensions(embeddings: np.ndarray, method: str) -> np.ndarray:
     """Reduce embedding dimensions to 2D for visualization"""
     if method == "UMAP":
@@ -127,362 +131,201 @@ def preview_combined_columns(df, columns, num_samples=5):
 
 def visualize_clustering_results(df: pd.DataFrame, embeddings: np.ndarray, 
                                clustering_results: Dict, config: Dict) -> None:
-    """Visualize clustering results using dimensionality reduction"""
+    """Visualize clustering results with UMAP and statistics"""
     
-    # Static Content (Always visible)
-    st.subheader("Clustering Results")
+    # Create export DataFrame for clusters
+    source_column = config["column"].replace("embeddings_", "")
+    clusters_df = pd.DataFrame({
+        source_column: df[source_column],
+        "Cluster": [f"Noise" if label == -1 else f"Cluster {label}" 
+                   for label in clustering_results["labels"]]
+    })
     
     # Export options
-    with st.expander("Export Options"):
-        export_tab1, export_tab2 = st.tabs(["Export Clusters", "Append to DataFrame"])
+    with st.expander("💾 Export Options", expanded=True):
+        tab1, tab2 = st.tabs(["Export Clusters", "Attach to DataFrame"])
         
-        with export_tab1:
-            export_df = pd.DataFrame({
-                'Cluster': clustering_results["labels"]
-            })
-            if "probabilities" in clustering_results:
-                export_df['Cluster_Probability'] = clustering_results["probabilities"]
-            if "outlier_scores" in clustering_results:
-                export_df['Outlier_Score'] = clustering_results["outlier_scores"]
-                
-            csv_data = export_df.to_csv(index=False)
+        with tab1:
+            st.write("Preview of clusters:")
+            st.dataframe(clusters_df.head(10))
+            csv_clusters = convert_df(clusters_df)
             st.download_button(
-                "Download Cluster Results",
-                csv_data,
-                "cluster_results.csv",
-                "text/csv"
+                label="Download Clusters CSV",
+                data=csv_clusters,
+                file_name="clusters.csv",
+                mime="text/csv",
             )
             
-        with export_tab2:
-            enhanced_df = df.copy()
-            enhanced_df['Cluster'] = clustering_results["labels"]
-            if "probabilities" in clustering_results:
-                enhanced_df['Cluster_Probability'] = clustering_results["probabilities"]
-            if "outlier_scores" in clustering_results:
-                enhanced_df['Outlier_Score'] = clustering_results["outlier_scores"]
-            
-            st.write("Preview of Enhanced DataFrame:")
-            st.dataframe(enhanced_df.head())
-            
-            csv_data = enhanced_df.to_csv(index=False)
+        with tab2:
+            st.write("Preview of full DataFrame with clusters:")
+            df_with_clusters = df.copy()
+            df_with_clusters["Cluster"] = clusters_df["Cluster"]
+            st.dataframe(df_with_clusters.head(10))
+            csv_full = convert_df(df_with_clusters)
             st.download_button(
-                "Download Enhanced DataFrame",
-                csv_data,
-                "enhanced_dataframe.csv",
-                "text/csv"
+                label="Download Full DataFrame CSV",
+                data=csv_full,
+                file_name="data_with_clusters.csv",
+                mime="text/csv",
             )
     
-    # Cluster Statistics
+    # UMAP Visualization
+    st.write("### UMAP Visualization of Clusters")
+    umap_reducer = umap.UMAP(random_state=42)
+    embedding_2d = umap_reducer.fit_transform(embeddings)
+    
+    fig = px.scatter(
+        x=embedding_2d[:, 0],
+        y=embedding_2d[:, 1],
+        color=[f"Noise" if label == -1 else f"Cluster {label}" 
+               for label in clustering_results["labels"]],
+        title="UMAP projection of clusters",
+        labels={'x': 'UMAP1', 'y': 'UMAP2'}
+    )
+    st.plotly_chart(fig)
+    
+    # Cluster Statistics at the bottom
+    st.write("### Cluster Statistics:")
     unique_labels = np.unique(clustering_results["labels"])
     cluster_sizes = pd.Series(clustering_results["labels"]).value_counts().sort_index()
     
-    st.write("Cluster Statistics:")
+    # Calculate noise points
+    n_noise = sum(1 for label in clustering_results["labels"] if label == -1)
+    n_clustered = len(clustering_results["labels"]) - n_noise
+    
+    # Display overall statistics
+    st.write(f"""
+    - Total points: {len(clustering_results['labels'])}
+    - Clustered points: {n_clustered} ({n_clustered/len(clustering_results['labels'])*100:.1f}%)
+    - Noise points (unclustered): {n_noise} ({n_noise/len(clustering_results['labels'])*100:.1f}%)
+    """)
+    
+    # Create cluster summary statistics
     stats_df = pd.DataFrame({
-        "Cluster": unique_labels,
-        "Size": cluster_sizes.values
+        "Cluster": [f"Noise" if label == -1 else f"Cluster {label}" for label in unique_labels],
+        "Size": cluster_sizes.values,
+        "Percentage": [f"{(size/len(clustering_results['labels'])*100):.1f}%" 
+                      for size in cluster_sizes.values]
     })
     st.dataframe(stats_df)
     
     # Algorithm-specific metrics
     if config["algorithm"] == "K-Means":
         st.write(f"Inertia: {clustering_results.get('inertia', 'N/A')}")
-        
-    elif config["algorithm"] == "DBSCAN":
-        n_noise = sum(1 for label in clustering_results["labels"] if label == -1)
-        st.write(f"Number of noise points: {n_noise}")
-        
-    elif config["algorithm"] == "HDBSCAN":
-        if "probabilities" in clustering_results:
-            st.write("Clustering Probabilities Distribution:")
-            fig_prob = px.histogram(
-                x=clustering_results["probabilities"],
-                nbins=50,
-                title="Distribution of Clustering Probabilities"
-            )
-            st.plotly_chart(fig_prob)
-
-    # Visualization section
-    st.subheader("Clustering Visualization")
-    
-    # Container for UMAP visualization
-    viz_container = st.container()
-    
-    with viz_container:
-        with st.spinner('Computing UMAP projection...'):
-            # Compute UMAP embeddings
-            reducer = umap.UMAP(
-                n_components=2,
-                random_state=42,
-                n_neighbors=15,
-                min_dist=0.1,
-                metric='cosine'
-            )
-            embeddings_2d = reducer.fit_transform(embeddings)
-            
-            # Create visualization
-            fig = px.scatter(
-                x=embeddings_2d[:, 0],
-                y=embeddings_2d[:, 1],
-                color=clustering_results["labels"],
-                title=f"Clustering Results ({config['algorithm']}) - UMAP Visualization",
-                labels={"color": "Cluster"},
-                color_continuous_scale='viridis' if config["algorithm"] == "K-Means" else 'turbo'
-            )
-            
-            # Add hover information
-            fig.update_traces(
-                hovertemplate="<br>".join([
-                    "Cluster: %{marker.color}",
-                    "x: %{x:.2f}",
-                    "y: %{y:.2f}"
-                ])
-            )
-            
-            # Update layout for better visibility
-            fig.update_layout(
-                height=600,
-                width=800,
-                showlegend=True,
-                legend_title_text="Clusters"
-            )
-            
-            st.plotly_chart(fig)
 
 def visualize_similarity_results(results: Dict[str, Any], config: Dict, df1: pd.DataFrame, df2: pd.DataFrame) -> None:
     """Visualize similarity results"""
     
-    # Check if we have a similarity matrix (cosine) or indices/scores (FAISS)
-    is_cosine = "similarity_matrix" in results
+    # Get source column name
+    source_column = config["column"].replace("embeddings_", "")
     
-    if is_cosine:
-        # First show the heatmap
-        visualize_cosine_similarity(results["similarity_matrix"])
+    # Export options at the top
+    with st.expander("💾 Export Options", expanded=True):
+        tab1, tab2 = st.tabs(["Export Text Pairs", "Attach to DataFrame"])
         
-        # Get the original text column
-        text_column = config["column"].replace("embeddings_", "")
-        
-        # Show top similar pairs
-        st.subheader("Most Similar Pairs")
-        similarity_matrix = results["similarity_matrix"]
-        
-        # Get indices of top similar pairs (excluding self-similarity)
-        n_top = 10  # Number of top pairs to show
-        pairs = []
-        for i in range(len(similarity_matrix)):
-            for j in range(i + 1, len(similarity_matrix[0])):
-                pairs.append({
-                    'Text 1': df1[text_column].iloc[i],
-                    'Text 2': df2[text_column].iloc[j],
-                    'Similarity Score': round(float(similarity_matrix[i][j]), 3)
-                })
-        
-        # Convert to DataFrame and sort
-        pairs_df = pd.DataFrame(pairs)
-        pairs_df = pairs_df.sort_values('Similarity Score', ascending=False).head(n_top)
-        
-        # Display as interactive DataFrame
-        st.dataframe(
-            pairs_df,
-            column_config={
-                'Similarity Score': st.column_config.NumberColumn(
-                    format="%.3f",
-                ),
-            },
-            hide_index=True
-        )
-
-        # Add export options
-        with st.expander("Export Data"):
-            export_tab1, export_tab2 = st.tabs(["Export Text Pairs", "Append to DataFrame"])
-            
-            with export_tab1:
-                # Export text pairs as new CSV
-                pairs_df = pd.DataFrame(pairs)
-                pairs_df = pairs_df.sort_values('Similarity Score', ascending=False)
-                csv_data = pairs_df.to_csv(index=False)
-                
-                st.download_button(
-                    "Download Similar Text Pairs",
-                    csv_data,
-                    "similar_text_pairs.csv",
-                    "text/csv"
-                )
-            
-            with export_tab2:
-                # Option to append to existing DataFrame
-                st.write("Append most similar text to your data:")
-                
-                # Let user select which DataFrame to append to
-                if "second_df" in st.session_state.files_data:
-                    df_choice = st.radio(
-                        "Select DataFrame to append to:",
-                        ["First DataFrame", "Second DataFrame"]
-                    )
-                    target_df = (st.session_state.files_data["main_df"] if df_choice == "First DataFrame" 
-                               else st.session_state.files_data["second_df"])
-                else:
-                    target_df = st.session_state.files_data["main_df"]
-                
-                # Create new DataFrame with original data plus most similar text
-                enhanced_df = target_df.copy()
-                
-                # Get most similar text for each row
-                similarity_dict = {}
+        with tab1:
+            # Check if we have cosine similarity or FAISS results
+            if "similarity_matrix" in results:
+                # Process cosine similarity matrix
+                similarity_matrix = results["similarity_matrix"]
+                pairs = []
                 for i in range(len(similarity_matrix)):
-                    similarities = similarity_matrix[i]
+                    for j in range(i + 1, len(similarity_matrix[0])):
+                        pairs.append({
+                            'Text1': df1[source_column].iloc[i],
+                            'Text2': df2[source_column].iloc[j],
+                            'Similarity': round(float(similarity_matrix[i][j]), 3)
+                        })
+                pairs_df = pd.DataFrame(pairs)
+                pairs_df = pairs_df.sort_values('Similarity', ascending=False)
+                
+            else:  # FAISS results
+                # Process FAISS results
+                pairs = []
+                for query_idx, (indices, scores) in enumerate(zip(results["indices"], results["similarity_scores"])):
+                    query_text = df1[source_column].iloc[query_idx]
+                    for idx, score in zip(indices, scores):
+                        if idx >= 0:  # Valid index
+                            pairs.append({
+                                'Text1': query_text,
+                                'Text2': df2[source_column].iloc[idx],
+                                'Similarity': round(float(score), 3)
+                            })
+                pairs_df = pd.DataFrame(pairs)
+            
+            # Show preview
+            st.write("Preview of text pairs:")
+            st.dataframe(pairs_df.head(10))
+            
+            # Download button
+            csv_pairs = convert_df(pairs_df)
+            st.download_button(
+                label="Download Text Pairs CSV",
+                data=csv_pairs,
+                file_name="similarity_pairs.csv",
+                mime="text/csv",
+            )
+        
+        with tab2:
+            if "similarity_matrix" in results:
+                # For cosine similarity, find most similar text for each row
+                similarity_matrix = results["similarity_matrix"]
+                enhanced_df = df1.copy()
+                most_similar = []
+                similarity_scores = []
+                
+                for i in range(len(similarity_matrix)):
+                    similarities = similarity_matrix[i].copy()
                     similarities[i] = -1  # Exclude self-similarity
                     most_similar_idx = np.argmax(similarities)
-                    similarity_dict[i] = {
-                        'Most_Similar_Text': df2[text_column].iloc[most_similar_idx],
-                        'Similarity_Score': similarities[most_similar_idx]
-                    }
+                    most_similar.append(df2[source_column].iloc[most_similar_idx])
+                    similarity_scores.append(round(float(similarities[most_similar_idx]), 3))
                 
-                # Add new columns
-                enhanced_df['Most_Similar_Text'] = enhanced_df.index.map(
-                    lambda x: similarity_dict[x]['Most_Similar_Text'] if x in similarity_dict else None
-                )
-                enhanced_df['Similarity_Score'] = enhanced_df.index.map(
-                    lambda x: similarity_dict[x]['Similarity_Score'] if x in similarity_dict else None
-                )
+                enhanced_df['Most_Similar_Text'] = most_similar
+                enhanced_df['Similarity_Score'] = similarity_scores
                 
-                # Preview enhanced DataFrame
-                st.write("Preview of Enhanced DataFrame:")
-                st.dataframe(enhanced_df.head())
+            else:  # FAISS results
+                # For FAISS, add nearest neighbors as lists
+                enhanced_df = df1.copy()
+                similar_texts = []
+                similarity_scores = []
                 
-                # Export enhanced DataFrame
-                csv_data = enhanced_df.to_csv(index=False)
-                st.download_button(
-                    "Download Enhanced DataFrame",
-                    csv_data,
-                    "enhanced_dataframe.csv",
-                    "text/csv"
-                )
-    else:  # faiss
-        st.subheader("Nearest Neighbors")
-        
-        # Get the original text column and k value
-        text_column = config["column"].replace("embeddings_", "")
-        k = int(config.get("num_neighbors", 3))
-        
-        # Process all queries and their k nearest neighbors
-        query_texts = []
-        similar_texts = []
-        similarity_scores = []
-        
-        for query_idx, (indices, scores) in enumerate(zip(results["indices"], results["similarity_scores"])):
-            query_text = df1[text_column].iloc[query_idx]
-            
-            # Filter out invalid indices (-1)
-            valid_mask = indices >= 0
-            valid_indices = indices[valid_mask]
-            valid_scores = scores[valid_mask]
-            
-            if len(valid_indices) > 0:
-                neighbor_texts = [df2[text_column].iloc[idx] for idx in valid_indices]
-                neighbor_scores = [f"{float(score):.3f}" for score in valid_scores]
+                for indices, scores in zip(results["indices"], results["similarity_scores"]):
+                    valid_mask = indices >= 0
+                    texts = [df2[source_column].iloc[idx] for idx in indices[valid_mask]]
+                    scores_list = [round(float(score), 3) for score in scores[valid_mask]]
+                    similar_texts.append(texts)
+                    similarity_scores.append(scores_list)
                 
-                query_texts.append(query_text)
-                similar_texts.append(neighbor_texts)
-                similarity_scores.append(neighbor_scores)
-        
-        # Create DataFrame with lists in columns
-        results_df = pd.DataFrame({
-            'Query Text': query_texts,
-            'Similar Texts': similar_texts,
-            'Similarity Scores': similarity_scores
-        })
-        
-        # Display as interactive DataFrame
-        st.dataframe(
-            results_df,
-            column_config={
-                'Query Text': st.column_config.TextColumn(width="medium"),
-                'Similar Texts': st.column_config.ListColumn(width="large"),
-                'Similarity Scores': st.column_config.ListColumn(width="medium"),
-            },
-            hide_index=True
-        )
-        
-        # Add export options
-        with st.expander("Export Data"):
-            export_tab1, export_tab2 = st.tabs(["Export Results", "Append to DataFrame"])
-            
-            with export_tab1:
-                # Create a flattened version of the results for export
-                flat_results = []
-                for query_text, neighbors, scores in zip(query_texts, similar_texts, similarity_scores):
-                    for neighbor_text, score in zip(neighbors, scores):
-                        flat_results.append({
-                            'Query Text': query_text,
-                            'Similar Text': neighbor_text,
-                            'Similarity Score': float(score)
-                        })
-                
-                flat_df = pd.DataFrame(flat_results)
-                
-                # Export as CSV
-                csv = flat_df.to_csv(index=False)
-                st.download_button(
-                    "Download Results as CSV",
-                    csv,
-                    "similarity_results.csv",
-                    "text/csv",
-                    key="download_results"
-                )
-                
-                # Preview of flattened results
-                st.write("Preview of export format:")
-                st.dataframe(
-                    flat_df.head(),
-                    column_config={
-                        'Similarity Score': st.column_config.NumberColumn(
-                            format="%.3f"
-                        )
-                    },
-                    hide_index=True
-                )
-            
-            with export_tab2:
-                st.write("Append results to original DataFrame:")
-                
-                # Let user select which DataFrame to append to
-                if "second_df" in st.session_state.files_data:
-                    df_choice = st.radio(
-                        "Select DataFrame to append to:",
-                        ["First DataFrame", "Second DataFrame"]
-                    )
-                    target_df = (df1 if df_choice == "First DataFrame" else df2)
-                else:
-                    target_df = df1
-                
-                # Create enhanced DataFrame by merging with results
-                enhanced_df = target_df.copy()
                 enhanced_df['Similar_Texts'] = similar_texts
                 enhanced_df['Similarity_Scores'] = similarity_scores
-                
-                # Preview enhanced DataFrame
-                st.write("Preview of Enhanced DataFrame:")
-                st.dataframe(
-                    enhanced_df,
-                    column_config={
-                        'Similar_Texts': st.column_config.ListColumn(
-                            width="large",
-                        ),
-                        'Similarity_Scores': st.column_config.ListColumn(
-                            width="medium",
-                        ),
-                    }
-                )
-                
-                # Export enhanced DataFrame
-                csv = enhanced_df.to_csv(index=False)
-                st.download_button(
-                    "Download Enhanced DataFrame",
-                    csv,
-                    "enhanced_dataframe_with_neighbors.csv",
-                    "text/csv",
-                    key="download_enhanced"
-                )
+            
+            # Show preview
+            st.write("Preview of enhanced DataFrame:")
+            st.dataframe(enhanced_df.head(10))
+            
+            # Download button
+            csv_enhanced = convert_df(enhanced_df)
+            st.download_button(
+                label="Download Enhanced DataFrame CSV",
+                data=csv_enhanced,
+                file_name="enhanced_data.csv",
+                mime="text/csv",
+            )
+    
+    # Visualizations
+    if "similarity_matrix" in results:
+        # Visualize cosine similarity matrix
+        st.write("### Similarity Matrix Heatmap")
+        visualize_cosine_similarity(results["similarity_matrix"])
+    else:
+        # Visualize FAISS results
+        st.write("### Nearest Neighbors Distribution")
+        visualize_faiss_results(results)
+    
+    # Show top similar pairs
+    st.write("### Most Similar Pairs")
+    st.dataframe(pairs_df.head(10))
 
 def export_visualization(fig, filename: str):
     """Export visualization to HTML file"""

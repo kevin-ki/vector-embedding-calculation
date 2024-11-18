@@ -1,4 +1,3 @@
-
 # Available embedding models for each provider
 OPENAI_EMBEDDING_MODELS = {
     "text-embedding-3-small": "Latest small model, good balance of performance and cost",
@@ -6,8 +5,14 @@ OPENAI_EMBEDDING_MODELS = {
 }
 
 VOYAGE_EMBEDDING_MODELS = {
-    "voyage-2": "Base model",
-    "voyage-3": "Latest model with improved performance"
+    "voyage-2": {
+        "model_name": "voyage-02",
+        "description": "Base model"
+    },
+    "voyage-3": {
+        "model_name": "voyage-03",
+        "description": "Latest model with improved performance"
+    }
 }
 
 SENTENCE_TRANSFORMER_MODELS = {
