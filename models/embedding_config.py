@@ -332,44 +332,132 @@ def setup_existing_embeddings(files_data: Dict) -> Dict:
 def generate_embeddings_for_config(files_data: Dict, config: Dict) -> Dict:
     """Generate embeddings based on configuration"""
     try:
-        model = EmbeddingModel(config["type"], config["model"], config.get("api_key"))
-        
-        if files_data["mode"] == "single":
-            # Generate embeddings for single file
-            if len(config["source_columns"]) > 1:
-                # Combine multiple columns
-                text_series = combine_text_columns(files_data["main_df"], config["source_columns"])
-            else:
-                # Single column
-                text_series = files_data["main_df"][config["source_columns"][0]]
+        # Create a container for all Streamlit elements
+        with st.container():
+            model = EmbeddingModel(config["type"], config["model"], config.get("api_key"))
+            batch_size = 32  # Optimal batch size for most models
             
-            # Generate embeddings
-            embeddings = model.generate_embeddings(text_series)
-            
-            # Create embedding column name and store in DataFrame
-            embedding_column = f"embeddings_{config['source_columns'][0]}"
-            files_data["main_df"][embedding_column] = embeddings.tolist()
+            if files_data["mode"] == "single":
+                # Prepare text data
+                if len(config["source_columns"]) > 1:
+                    text_series = combine_text_columns(files_data["main_df"], config["source_columns"])
+                else:
+                    text_series = files_data["main_df"][config["source_columns"][0]]
+                
+                texts = list(text_series)
+                total = len(texts)
+                
+                # Create a status container
+                status_container = st.empty()
+                with status_container.container():
+                    st.write("Generating embeddings...")
+                    progress_bar = st.progress(0)
+                    embeddings_list = []
+                    
+                    for i in range(0, total, batch_size):
+                        batch = texts[i:min(i + batch_size, total)]
+                        st.write(f"Processing batch {i//batch_size + 1}/{(total-1)//batch_size + 1}")
+                        batch_embeddings = model.generate_embeddings(batch)
+                        embeddings_list.extend(batch_embeddings)
+                        progress = min((i + batch_size) / total, 1.0)
+                        progress_bar.progress(progress)
+                
+                embeddings = np.array(embeddings_list)
+                status_container.empty()
+                
+                # Store results
+                embedding_column = f"embeddings_{config['source_columns'][0]}"
+                files_data["main_df"][embedding_column] = embeddings.tolist()
+                
+                result = {
+                    "mode": "single",
+                    "embedding_columns": [embedding_column],
+                    "embedding_column": embedding_column,
+                    "embeddings": embeddings,
+                    "source_columns": config["source_columns"]
+                }
+                
+            else:  # dual mode
+                # Process first file
+                if len(config["source_columns_1"]) > 1:
+                    text_series_1 = combine_text_columns(files_data["main_df"], config["source_columns_1"])
+                else:
+                    text_series_1 = files_data["main_df"][config["source_columns_1"][0]]
+                
+                texts_1 = list(text_series_1)
+                total_1 = len(texts_1)
+                
+                # Process second file
+                if len(config["source_columns_2"]) > 1:
+                    text_series_2 = combine_text_columns(files_data["second_df"], config["source_columns_2"])
+                else:
+                    text_series_2 = files_data["second_df"][config["source_columns_2"][0]]
+                
+                texts_2 = list(text_series_2)
+                total_2 = len(texts_2)
+                
+                # Create status containers for both files
+                status_container_1 = st.empty()
+                with status_container_1.container():
+                    st.write("Processing first file...")
+                    progress_bar = st.progress(0)
+                    embeddings_list_1 = []
+                    
+                    for i in range(0, total_1, batch_size):
+                        batch = texts_1[i:min(i + batch_size, total_1)]
+                        st.write(f"Processing batch {i//batch_size + 1}/{(total_1-1)//batch_size + 1}")
+                        batch_embeddings = model.generate_embeddings(batch)
+                        embeddings_list_1.extend(batch_embeddings)
+                        progress = min((i + batch_size) / total_1, 1.0)
+                        progress_bar.progress(progress)
+                
+                embeddings_1 = np.array(embeddings_list_1)
+                status_container_1.empty()
+                
+                status_container_2 = st.empty()
+                with status_container_2.container():
+                    st.write("Processing second file...")
+                    progress_bar = st.progress(0)
+                    embeddings_list_2 = []
+                    
+                    for i in range(0, total_2, batch_size):
+                        batch = texts_2[i:min(i + batch_size, total_2)]
+                        st.write(f"Processing batch {i//batch_size + 1}/{(total_2-1)//batch_size + 1}")
+                        batch_embeddings = model.generate_embeddings(batch)
+                        embeddings_list_2.extend(batch_embeddings)
+                        progress = min((i + batch_size) / total_2, 1.0)
+                        progress_bar.progress(progress)
+                
+                embeddings_2 = np.array(embeddings_list_2)
+                status_container_2.empty()
+                
+                # Store results
+                embedding_column_1 = f"embeddings_{config['source_columns_1'][0]}"
+                embedding_column_2 = f"embeddings_{config['source_columns_2'][0]}"
+                
+                files_data["main_df"][embedding_column_1] = embeddings_1.tolist()
+                files_data["second_df"][embedding_column_2] = embeddings_2.tolist()
+                
+                result = {
+                    "mode": "dual",
+                    "embedding_columns_1": [embedding_column_1],
+                    "embedding_columns_2": [embedding_column_2],
+                    "embedding_column_1": embedding_column_1,
+                    "embedding_column_2": embedding_column_2,
+                    "embeddings_1": embeddings_1,
+                    "embeddings_2": embeddings_2,
+                    "source_columns_1": config["source_columns_1"],
+                    "source_columns_2": config["source_columns_2"]
+                }
             
             # Update session state
             if "files_data" not in st.session_state:
                 st.session_state.files_data = {}
             st.session_state.files_data = files_data
-            
-            result = {
-                "mode": "single",
-                "embedding_columns": [embedding_column],
-                "embedding_column": embedding_column,
-                "embeddings": embeddings,
-                "source_columns": config["source_columns"]
-            }
-            
             st.session_state.embedding_results = result
+            
             return result
-            
-        else:  # dual mode
-            # Handle dual mode similarly...
-            pass
-            
+                
     except Exception as e:
         st.error(f"Error during embedding generation: {str(e)}")
         st.error(f"Config: {config}")

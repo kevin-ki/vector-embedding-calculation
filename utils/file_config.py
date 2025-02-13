@@ -44,10 +44,10 @@ def setup_file_configuration():
                 help="Upload your second CSV file with or without embeddings"
             )
             if file1 and file2:
-                files_data["df1"] = pd.read_csv(file1)
-                files_data["df2"] = pd.read_csv(file2)
+                files_data["main_df"] = pd.read_csv(file1)
+                files_data["second_df"] = pd.read_csv(file2)
                 files_data["mode"] = "dual"
-                st.sidebar.success(f"Loaded files with {len(files_data['df1'])} and {len(files_data['df2'])} rows")
+                st.sidebar.success(f"Loaded files with {len(files_data['main_df'])} and {len(files_data['second_df'])} rows")
     except Exception as e:
         st.error(f"Error loading file(s): {str(e)}")
         return None
